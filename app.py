@@ -68,7 +68,7 @@ DEW_MAX_PKL = os.path.join(MODEL_DIR, "atobs_orange_dew_max.pkl")
 DEW_MIN_PKL = os.path.join(MODEL_DIR, "atobs_orange_dew_min.pkl")
 SOL_MAX_PKL = os.path.join(MODEL_DIR, "atobs_only_sol_max.pkl")
 
-TA_Z_TIF = os.path.join(RASTER_DIR, "Ta_z_orange.tif")
+TA_Z_TIF = os.path.join(RASTER_DIR, "TA_z_orange.tif")
 TD_Z_TIF = os.path.join(RASTER_DIR, "Td_z_orange.tif")
 SOL_Z_TIF = os.path.join(RASTER_DIR, "SR_z_orange.tif")
 ROUGHNESS_TIF = os.path.join(RASTER_DIR, "surface_roughness.tif")
@@ -482,4 +482,5 @@ if run_button:
             mime="application/json",
         )
     else:
+
         st.warning("WBGT step skipped because one or more required rasters or models are missing.")
