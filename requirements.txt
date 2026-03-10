@@ -3,6 +3,8 @@ numpy
 matplotlib
 rasterio
 scikit-learn==1.3.2
+pandas
+
 
 
 
