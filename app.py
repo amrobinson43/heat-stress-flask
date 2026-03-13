@@ -1,13 +1,11 @@
 import os
-import io
-import json
 import math
 import pickle
 import uuid
 from datetime import datetime
 
 import numpy as np
-from flask import Flask, render_template, request, send_file, url_for
+from flask import Flask, request, send_file, url_for, render_template_string
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -50,6 +48,9 @@ SOLAR_CONSTANT = 1367.0
 R = 287.05
 g = 9.80665
 
+LOCKED_TIME_STR = "14:15"
+LOCKED_TIME_LABEL = "2:15 PM Local Time"
+
 # ================================
 # Paths
 # ================================
@@ -85,6 +86,497 @@ ATOBS_FEATURES = [
 # ================================
 MODELS = None
 RASTERS = None
+
+# ================================
+# Integrated HTML template
+# ================================
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Afternoon Heat Stress Prediction Tool</title>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f4f6f8;
+            color: #222;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+
+        h1, h2, h3 {
+            margin-top: 0;
+            color: #1d3557;
+        }
+
+        p {
+            line-height: 1.65;
+            margin-bottom: 14px;
+        }
+
+        .subtle {
+            color: #556;
+        }
+
+        .note {
+            background: #eef6ff;
+            border-left: 5px solid #457b9d;
+            padding: 14px 16px;
+            border-radius: 6px;
+            margin-top: 16px;
+        }
+
+        .error {
+            background: #ffe6e6;
+            color: #8b0000;
+            border-left: 5px solid #cc0000;
+            padding: 14px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .warning {
+            background: #fff8e6;
+            color: #7a5a00;
+            border-left: 5px solid #d4a017;
+            padding: 14px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 18px;
+            align-items: end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        input[type="date"],
+        select {
+            padding: 10px;
+            border: 1px solid #c9d2da;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        button {
+            padding: 12px 18px;
+            background: #1d3557;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #16324f;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .summary-item {
+            background: #f7f9fb;
+            border: 1px solid #dce5ec;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .images-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+        }
+
+        .image-card {
+            background: #fafafa;
+            border: 1px solid #dce5ec;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .image-card h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+
+        .image-card img {
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
+            border: 1px solid #d0d7de;
+        }
+
+        .top-text p {
+            margin-bottom: 12px;
+        }
+
+        .locked-time {
+            font-weight: bold;
+            color: #1d3557;
+        }
+
+        .small {
+            font-size: 0.95rem;
+        }
+
+        .progress-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(244, 246, 248, 0.92);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .progress-overlay.active {
+            display: flex;
+        }
+
+        .progress-box {
+            width: min(520px, calc(100vw - 40px));
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            border: 1px solid #dce5ec;
+        }
+
+        .progress-box h3 {
+            margin-bottom: 10px;
+        }
+
+        .progress-box p {
+            margin-bottom: 14px;
+            color: #556;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 16px;
+            background: #e7edf3;
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid #d3dce5;
+        }
+
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #1d3557, #457b9d);
+            border-radius: 999px;
+            transition: width 0.35s ease;
+        }
+
+        .progress-percent {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #1d3557;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div id="progressOverlay" class="progress-overlay" aria-hidden="true">
+        <div class="progress-box">
+            <h3>Generating maps...</h3>
+            <p>Please wait while the tool computes the meteorological fields and WBGT outputs.</p>
+            <div class="progress-track">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+            <div id="progressPercent" class="progress-percent">0%</div>
+        </div>
+    </div>
+
+    <div class="container">
+
+        <div class="card">
+            <h1>Afternoon Wet Bulb Globe Temperature Prediction Tool</h1>
+
+            <div class="top-text">
+                <p>
+                    This tool predicts the spatial distribution of afternoon Wet Bulb Globe Temperature (WBGT) across Carrboro and Chapel Hill at 2:15PM, the 
+                    climatological peak of heat stress in the area. <span class="locked-time">{{ locked_time_label }}</span>. It uses broad-scale weather conditions 
+                    (i.e., what a weather app says) to generate spatially continuous maps of 2 m air temperature, dew point temperature, solar radiation, wind speed, 
+                    surface pressure, WBGT, black globe temperature, and natural wet-bulb temperature.
+                </p>
+
+                <p>
+                    The results generated using machine-learning models trained on observations collected during the summer 2025 Southeast Regional Climate Center citizen-science campaign
+                    This campaign used walking, cycling, and driving mobile transects to capture fine-scale spatial variability across the urban landscape. For each meteorological
+                    variable, the machine-learning models predict the day-specific minimum and maximum conditions expected across the study area from
+                    the at-observation ambient inputs entered below. Precomputed raster surfaces derived from the transect data preserve the observed
+                    spatial patterning, and those surfaces are then scaled using the model-predicted ranges to create spatially continuous gridded fields.
+                    In other words, the models determine the magnitude of the day’s meteorological range, while the raster layers preserve the fine-scale
+                    spatial structure identified from the mobile observations.
+                </p>
+
+                <p>
+                    WBGT is then calculated using the outdoor formulation from Liljegren et al. (2008). The tool computes WBGT as
+                    <strong>0.7 × natural wet-bulb temperature + 0.2 × black globe temperature + 0.1 × air temperature</strong>. Rather than using a
+                    simplified empirical estimate, the app solves the underlying energy-balance equations iteratively at each grid cell using air
+                    temperature, dew point temperature, solar radiation, wind speed, and pressure. This allows the resulting WBGT map to reflect the
+                    combined effects of humidity, radiative loading, ventilation, and ambient thermal conditions.
+                </p>
+
+                <p>
+                    The WBGT flag maps classify each pixel into standard heat-risk categories as defined by the North Carolina High School Athletic Association. In degrees Fahrenheit, the thresholds are
+                    <strong>white: below 80°F</strong>,
+                    <strong>green: 80–85°F</strong>,
+                    <strong>yellow: 85–88°F</strong>,
+                    <strong>red: 88–90°F</strong>, and
+                    <strong>black: above 90°F</strong>.
+                    In degrees Celsius, these correspond to
+                    <strong>below 26.7°C</strong>,
+                    <strong>26.7–29.4°C</strong>,
+                    <strong>29.4–31.1°C</strong>,
+                    <strong>31.1–32.2°C</strong>, and
+                    <strong>above 32.2°C</strong>, respectively. These categories are intended to help interpret heat stress and provide guidance to prevent heat related illness.
+                </p>
+
+                <div class="note small">
+                    This tool is locked to <strong>{{ locked_time_label }}</strong> so that all runs represent the same standardized point in the daytime heat-stress cycle.
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Input Conditions</h2>
+
+            {% if error %}
+                <div class="error">
+                    <strong>Error:</strong> {{ error }}
+                </div>
+            {% endif %}
+
+            <form method="POST" id="predictionForm">
+                <div class="form-group">
+                    <label for="unit_system">Input / Output Units</label>
+                    <select name="unit_system" id="unit_system" required>
+                        <option value="C" {% if form_data['unit_system'] == 'C' %}selected{% endif %}>Celsius / m/s</option>
+                        <option value="F" {% if form_data['unit_system'] == 'F' %}selected{% endif %}>Fahrenheit / mph</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="era_tair">
+                        Air Temperature at Observation
+                        {% if show_input_units %}
+                            {% if form_data['unit_system'] == 'F' %}(°F){% else %}(°C){% endif %}
+                        {% endif %}
+                    </label>
+                    <input type="number" step="any" name="era_tair" id="era_tair" value="{{ form_data['era_tair'] }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="era_dpt">
+                        Dew Point at Observation
+                        {% if show_input_units %}
+                            {% if form_data['unit_system'] == 'F' %}(°F){% else %}(°C){% endif %}
+                        {% endif %}
+                    </label>
+                    <input type="number" step="any" name="era_dpt" id="era_dpt" value="{{ form_data['era_dpt'] }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="era_wspd">
+                        Wind Speed at Observation
+                        {% if show_input_units %}
+                            {% if form_data['unit_system'] == 'F' %}(mph){% else %}(m/s){% endif %}
+                        {% endif %}
+                    </label>
+                    <input type="number" step="any" name="era_wspd" id="era_wspd" value="{{ form_data['era_wspd'] }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="era_cloud">Cloud Cover at Observation (%)</label>
+                    <input type="number" step="any" name="era_cloud" id="era_cloud" value="{{ form_data['era_cloud'] }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="ref_pressure_mb">Reference Pressure (mb)</label>
+                    <input type="number" step="any" name="ref_pressure_mb" id="ref_pressure_mb" value="{{ form_data['ref_pressure_mb'] }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="date_val">Date</label>
+                    <input type="date" name="date_val" id="date_val" value="{{ form_data['date_val'] }}" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="time_display">Analysis Time</label>
+                    <input type="text" id="time_display" value="{{ locked_time_label }}" readonly>
+                    <input type="hidden" name="time_val" value="{{ locked_time_str }}">
+                </div>
+
+                <div class="form-group">
+                    <button type="submit" id="runButton">Run Prediction</button>
+                </div>
+            </form>
+        </div>
+
+        {% if result %}
+            <div class="card">
+                <h2>Prediction Summary</h2>
+
+                {% if result.wbgt_warning %}
+                    <div class="warning">
+                        <strong>Warning:</strong> {{ result.wbgt_warning }}
+                    </div>
+                {% endif %}
+
+                <div class="summary-grid">
+                    <div class="summary-item"><strong>Run Time (UTC):</strong><br>{{ result.summary.run_at }}</div>
+                    <div class="summary-item"><strong>Locked Analysis Time:</strong><br>{{ result.summary.inputs.locked_time_note }}</div>
+                    <div class="summary-item"><strong>WBGT Time (Local):</strong><br>{{ result.summary.inputs.wbgt_time_local }}</div>
+                    <div class="summary-item"><strong>Unit System:</strong><br>{{ result.summary.inputs.unit_system_label }}</div>
+                    <div class="summary-item"><strong>Predicted Temperature Min:</strong><br>{{ "%.2f"|format(result.synoptic_predictions.temp_min_display) }} {{ result.summary.inputs.temp_unit }}</div>
+                    <div class="summary-item"><strong>Predicted Temperature Max:</strong><br>{{ "%.2f"|format(result.synoptic_predictions.temp_max_display) }} {{ result.summary.inputs.temp_unit }}</div>
+
+                    {% if result.synoptic_predictions.dew_min_display is not none %}
+                    <div class="summary-item"><strong>Predicted Dew Point Min:</strong><br>{{ "%.2f"|format(result.synoptic_predictions.dew_min_display) }} {{ result.summary.inputs.temp_unit }}</div>
+                    {% endif %}
+
+                    {% if result.synoptic_predictions.dew_max_display is not none %}
+                    <div class="summary-item"><strong>Predicted Dew Point Max:</strong><br>{{ "%.2f"|format(result.synoptic_predictions.dew_max_display) }} {{ result.summary.inputs.temp_unit }}</div>
+                    {% endif %}
+
+                    {% if result.synoptic_predictions.sol_max_Wm2 is not none %}
+                    <div class="summary-item"><strong>Predicted Solar Radiation Max:</strong><br>{{ "%.2f"|format(result.synoptic_predictions.sol_max_Wm2) }} W/m²</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Generated Maps</h2>
+                <div class="images-grid">
+                    {% for key, item in result.image_urls.items() %}
+                        <div class="image-card">
+                            <h3>{{ item.title }}</h3>
+                            <img src="{{ item.url }}" alt="{{ key }}">
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+    </div>
+
+    <script>
+        (function () {
+            const form = document.getElementById("predictionForm");
+            const overlay = document.getElementById("progressOverlay");
+            const fill = document.getElementById("progressFill");
+            const percent = document.getElementById("progressPercent");
+            const button = document.getElementById("runButton");
+
+            let timer = null;
+            let progress = 0;
+
+            function setProgress(value) {
+                progress = Math.max(0, Math.min(95, value));
+                fill.style.width = progress + "%";
+                percent.textContent = Math.round(progress) + "%";
+            }
+
+            function startProgress() {
+                overlay.classList.add("active");
+                overlay.setAttribute("aria-hidden", "false");
+                button.disabled = true;
+                button.textContent = "Running...";
+
+                setProgress(6);
+
+                timer = setInterval(function () {
+                    if (progress < 35) {
+                        setProgress(progress + 6);
+                    } else if (progress < 60) {
+                        setProgress(progress + 3);
+                    } else if (progress < 78) {
+                        setProgress(progress + 2);
+                    } else if (progress < 90) {
+                        setProgress(progress + 1);
+                    }
+                }, 350);
+            }
+
+            if (form) {
+                form.addEventListener("submit", function () {
+                    startProgress();
+                });
+            }
+
+            window.addEventListener("pageshow", function () {
+                if (timer) {
+                    clearInterval(timer);
+                }
+                setProgress(100);
+                setTimeout(function () {
+                    overlay.classList.remove("active");
+                    overlay.setAttribute("aria-hidden", "true");
+                    button.disabled = false;
+                    button.textContent = "Run Prediction";
+                    setProgress(0);
+                }, 150);
+            });
+        })();
+    </script>
+</body>
+</html>
+"""
+
+# ================================
+# Unit helpers
+# ================================
+def c_to_f(temp_c):
+    return temp_c * 9.0 / 5.0 + 32.0
+
+
+def f_to_c(temp_f):
+    return (temp_f - 32.0) * 5.0 / 9.0
+
+
+def ms_to_mph(speed_ms):
+    return speed_ms * 2.2369362920544
+
+
+def mph_to_ms(speed_mph):
+    return speed_mph * 0.44704
 
 
 # ================================
@@ -386,27 +878,33 @@ def cleanup_old_outputs(max_files=100):
 def index():
     error = None
     result = None
+    show_input_units = request.method == "POST"
 
     defaults = {
+        "unit_system": "C",
         "era_tair": 32.0,
         "era_dpt": 22.0,
         "era_wspd": 2.5,
         "era_cloud": 35.0,
         "ref_pressure_mb": 1008.0,
         "date_val": datetime.now().strftime("%Y-%m-%d"),
-        "time_val": datetime.now().strftime("%H:%M"),
+        "time_val": LOCKED_TIME_STR,
     }
 
     form_data = defaults.copy()
 
     if request.method == "POST":
+        form_data["unit_system"] = request.form.get("unit_system", "C").upper()
+        if form_data["unit_system"] not in ("C", "F"):
+            form_data["unit_system"] = "C"
+
         form_data["era_tair"] = request.form.get("era_tair", "32.0")
         form_data["era_dpt"] = request.form.get("era_dpt", "22.0")
         form_data["era_wspd"] = request.form.get("era_wspd", "2.5")
         form_data["era_cloud"] = request.form.get("era_cloud", "35.0")
         form_data["ref_pressure_mb"] = request.form.get("ref_pressure_mb", "1008.0")
         form_data["date_val"] = request.form.get("date_val", defaults["date_val"])
-        form_data["time_val"] = request.form.get("time_val", defaults["time_val"])
+        form_data["time_val"] = LOCKED_TIME_STR
 
         try:
             if rasterio is None:
@@ -414,39 +912,58 @@ def index():
 
             ensure_loaded()
 
-            era_tair = float(form_data["era_tair"])
-            era_dpt = float(form_data["era_dpt"])
-            era_wspd = float(form_data["era_wspd"])
+            unit_system = form_data["unit_system"]
+
+            era_tair_in = float(form_data["era_tair"])
+            era_dpt_in = float(form_data["era_dpt"])
+            era_wspd_in = float(form_data["era_wspd"])
             era_cloud = float(form_data["era_cloud"])
             ref_pressure_mb = float(form_data["ref_pressure_mb"])
+
+            # Convert user inputs to internal SI/Celsius units
+            if unit_system == "F":
+                era_tair = f_to_c(era_tair_in)
+                era_dpt = f_to_c(era_dpt_in)
+                era_wspd = mph_to_ms(era_wspd_in)
+                temp_unit = "°F"
+                wind_unit = "mph"
+                unit_system_label = "Fahrenheit / mph"
+            else:
+                era_tair = era_tair_in
+                era_dpt = era_dpt_in
+                era_wspd = era_wspd_in
+                temp_unit = "°C"
+                wind_unit = "m/s"
+                unit_system_label = "Celsius / m/s"
+
             dt_local = datetime.strptime(
-                f'{form_data["date_val"]} {form_data["time_val"]}',
+                f'{form_data["date_val"]} {LOCKED_TIME_STR}',
                 "%Y-%m-%d %H:%M"
             )
 
             X = np.array([[era_tair, era_dpt, era_wspd, era_cloud]], dtype=float)
 
-            t_max = float(MODELS["temp_max"].predict(X)[0])
-            t_min = float(MODELS["temp_min"].predict(X)[0])
+            t_max_c = float(MODELS["temp_max"].predict(X)[0])
+            t_min_c = float(MODELS["temp_min"].predict(X)[0])
 
-            d_max = float(MODELS["dew_max"].predict(X)[0]) if MODELS["dew_max"] is not None else None
-            d_min = float(MODELS["dew_min"].predict(X)[0]) if MODELS["dew_min"] is not None else None
+            d_max_c = float(MODELS["dew_max"].predict(X)[0]) if MODELS["dew_max"] is not None else None
+            d_min_c = float(MODELS["dew_min"].predict(X)[0]) if MODELS["dew_min"] is not None else None
             s_max = float(MODELS["sol_max"].predict(X)[0]) if MODELS["sol_max"] is not None else None
 
             ta_w = z_to_01(RASTERS["ta_z"])
-            temp_map = scale_map(ta_w, t_min, t_max)
+            temp_map_c = scale_map(ta_w, t_min_c, t_max_c)
 
-            dew_map = None
-            if RASTERS["td_z"] is not None and d_min is not None and d_max is not None:
+            dew_map_c = None
+            if RASTERS["td_z"] is not None and d_min_c is not None and d_max_c is not None:
                 td_w = z_to_01(RASTERS["td_z"])
-                dew_map = scale_map(td_w, d_min, d_max)
+                dew_map_c = scale_map(td_w, d_min_c, d_max_c)
 
             sol_map = None
             if RASTERS["sol_z"] is not None and s_max is not None:
                 sol_w = z_to_01(RASTERS["sol_z"])
                 sol_map = scale_map(sol_w, 0.0, s_max)
 
-            u2_map = None
+            u2_map_ms = None
             if RASTERS["z0"] is not None:
                 z0_arr = RASTERS["z0"]
                 z0_meta = RASTERS["z0_meta"]
@@ -458,7 +975,7 @@ def index():
                     (z0_meta["height"] != tmpl_meta["height"])
                 )
                 z0_aligned = align_to_template(z0_arr, z0_meta, tmpl_meta) if needs_align else z0_arr
-                u2_map = compute_u2_from_u10_and_z0(era_wspd, z0_aligned)
+                u2_map_ms = compute_u2_from_u10_and_z0(era_wspd, z0_aligned)
 
             pressure_map = None
             if RASTERS["elev"] is not None:
@@ -473,68 +990,139 @@ def index():
                 )
                 elev_aligned = align_to_template(elev_arr, elev_meta, tmpl_meta) if needs_align else elev_arr
                 ref_elevation_m = float(np.nanmean(elev_aligned))
-                pressure_map = calculate_pressure(elev_aligned, temp_map, ref_pressure_mb, ref_elevation_m)
+                pressure_map = calculate_pressure(elev_aligned, temp_map_c, ref_pressure_mb, ref_elevation_m)
 
             image_urls = {}
 
-            temp_name = make_output_name("temp")
-            save_map(temp_map, "Temperature (°C)", os.path.join(OUTPUT_DIR, temp_name), cmap="coolwarm")
-            image_urls["temp_map"] = url_for("output_file", filename=temp_name)
+            # Convert export maps to selected unit system
+            if unit_system == "F":
+                temp_map_display = c_to_f(temp_map_c)
+                dew_map_display = c_to_f(dew_map_c) if dew_map_c is not None else None
+                u2_map_display = ms_to_mph(u2_map_ms) if u2_map_ms is not None else None
+            else:
+                temp_map_display = temp_map_c
+                dew_map_display = dew_map_c
+                u2_map_display = u2_map_ms
 
-            if dew_map is not None:
+            temp_name = make_output_name("temp")
+            save_map(
+                temp_map_display,
+                f"Temperature ({temp_unit})",
+                os.path.join(OUTPUT_DIR, temp_name),
+                cmap="coolwarm"
+            )
+            image_urls["temp_map"] = {
+                "url": url_for("output_file", filename=temp_name),
+                "title": f"Temperature ({temp_unit})"
+            }
+
+            if dew_map_display is not None:
                 dew_name = make_output_name("dew")
-                save_map(dew_map, "Dew Point (°C)", os.path.join(OUTPUT_DIR, dew_name), cmap="BrBG")
-                image_urls["dew_map"] = url_for("output_file", filename=dew_name)
+                save_map(
+                    dew_map_display,
+                    f"Dew Point ({temp_unit})",
+                    os.path.join(OUTPUT_DIR, dew_name),
+                    cmap="BrBG"
+                )
+                image_urls["dew_map"] = {
+                    "url": url_for("output_file", filename=dew_name),
+                    "title": f"Dew Point ({temp_unit})"
+                }
 
             if sol_map is not None:
                 sol_name = make_output_name("solar")
-                save_map(sol_map, "Solar Radiation (W/m²)", os.path.join(OUTPUT_DIR, sol_name), cmap="inferno")
-                image_urls["sol_map"] = url_for("output_file", filename=sol_name)
+                save_map(
+                    sol_map,
+                    "Solar Radiation (W/m²)",
+                    os.path.join(OUTPUT_DIR, sol_name),
+                    cmap="inferno"
+                )
+                image_urls["sol_map"] = {
+                    "url": url_for("output_file", filename=sol_name),
+                    "title": "Solar Radiation (W/m²)"
+                }
 
-            if u2_map is not None:
+            if u2_map_display is not None:
                 wind_name = make_output_name("wind")
-                save_map(u2_map, "Wind Speed at 2 m (m/s)", os.path.join(OUTPUT_DIR, wind_name), cmap="viridis")
-                image_urls["u2_map"] = url_for("output_file", filename=wind_name)
+                save_map(
+                    u2_map_display,
+                    f"Wind Speed at 2 m ({wind_unit})",
+                    os.path.join(OUTPUT_DIR, wind_name),
+                    cmap="viridis"
+                )
+                image_urls["u2_map"] = {
+                    "url": url_for("output_file", filename=wind_name),
+                    "title": f"Wind Speed at 2 m ({wind_unit})"
+                }
 
             if pressure_map is not None:
                 pressure_name = make_output_name("pressure")
-                save_map(pressure_map, "Surface Pressure (mb)", os.path.join(OUTPUT_DIR, pressure_name), cmap="viridis")
-                image_urls["pressure_map"] = url_for("output_file", filename=pressure_name)
+                save_map(
+                    pressure_map,
+                    "Surface Pressure (mb)",
+                    os.path.join(OUTPUT_DIR, pressure_name),
+                    cmap="viridis"
+                )
+                image_urls["pressure_map"] = {
+                    "url": url_for("output_file", filename=pressure_name),
+                    "title": "Surface Pressure (mb)"
+                }
 
             wbgt_available = (
-                dew_map is not None and
+                dew_map_c is not None and
                 sol_map is not None and
-                u2_map is not None and
+                u2_map_ms is not None and
                 pressure_map is not None
             )
 
             wbgt_warning = None
+
+            # Summary display values
+            if unit_system == "F":
+                temp_min_display = c_to_f(t_min_c)
+                temp_max_display = c_to_f(t_max_c)
+                dew_min_display = c_to_f(d_min_c) if d_min_c is not None else None
+                dew_max_display = c_to_f(d_max_c) if d_max_c is not None else None
+            else:
+                temp_min_display = t_min_c
+                temp_max_display = t_max_c
+                dew_min_display = d_min_c
+                dew_max_display = d_max_c
+
             summary = {
                 "run_at": datetime.utcnow().isoformat() + "Z",
                 "inputs": {
-                    "era_tair_C_at_obs": era_tair,
-                    "era_dpt_C_at_obs": era_dpt,
-                    "era_wspd_ms_at_obs": era_wspd,
+                    "era_tair_input": era_tair_in,
+                    "era_dpt_input": era_dpt_in,
+                    "era_wspd_input": era_wspd_in,
                     "era_cloud_pct_at_obs": era_cloud,
                     "ref_pressure_mb": ref_pressure_mb,
                     "wbgt_time_local": dt_local.strftime("%Y-%m-%d %H:%M"),
+                    "locked_time_note": LOCKED_TIME_LABEL,
+                    "unit_system_label": unit_system_label,
+                    "temp_unit": temp_unit,
+                    "wind_unit": wind_unit,
                 },
                 "synoptic_predictions": {
-                    "temp_max_C": t_max,
-                    "temp_min_C": t_min,
-                    "dew_max_C": d_max,
-                    "dew_min_C": d_min,
+                    "temp_max_C": t_max_c,
+                    "temp_min_C": t_min_c,
+                    "dew_max_C": d_max_c,
+                    "dew_min_C": d_min_c,
                     "sol_max_Wm2": s_max,
+                    "temp_max_display": temp_max_display,
+                    "temp_min_display": temp_min_display,
+                    "dew_max_display": dew_max_display,
+                    "dew_min_display": dew_min_display,
                 },
             }
 
             if wbgt_available:
                 wbgt_k, tg_k, tnw_k = wbgt_from_fields(
-                    tair_c=temp_map,
-                    td_c=dew_map,
+                    tair_c=temp_map_c,
+                    td_c=dew_map_c,
                     solar_wm2=sol_map,
                     pair_mb=pressure_map,
-                    speed_ms=u2_map,
+                    speed_ms=u2_map_ms,
                     dt_local=dt_local,
                     lat=SITE_LAT,
                     lon=SITE_LON,
@@ -543,27 +1131,64 @@ def index():
                 wbgt_c = wbgt_k - 273.15
                 tg_c = tg_k - 273.15
                 tnw_c = tnw_k - 273.15
-                wbgt_f = wbgt_c * 9 / 5 + 32
+
+                if unit_system == "F":
+                    wbgt_display = c_to_f(wbgt_c)
+                    tg_display = c_to_f(tg_c)
+                    tnw_display = c_to_f(tnw_c)
+                    flag_unit = "F"
+                else:
+                    wbgt_display = wbgt_c
+                    tg_display = tg_c
+                    tnw_display = tnw_c
+                    flag_unit = "C"
 
                 wbgt_name = make_output_name("wbgt")
-                save_map(wbgt_c, "WBGT (°C)", os.path.join(OUTPUT_DIR, wbgt_name), cmap="bwr")
-                image_urls["wbgt_map"] = url_for("output_file", filename=wbgt_name)
+                save_map(
+                    wbgt_display,
+                    f"WBGT ({temp_unit})",
+                    os.path.join(OUTPUT_DIR, wbgt_name),
+                    cmap="bwr"
+                )
+                image_urls["wbgt_map"] = {
+                    "url": url_for("output_file", filename=wbgt_name),
+                    "title": f"WBGT ({temp_unit})"
+                }
 
                 tg_name = make_output_name("tg")
-                save_map(tg_c, "Black Globe Temperature (°C)", os.path.join(OUTPUT_DIR, tg_name), cmap="Reds")
-                image_urls["tg_map"] = url_for("output_file", filename=tg_name)
+                save_map(
+                    tg_display,
+                    f"Black Globe Temperature ({temp_unit})",
+                    os.path.join(OUTPUT_DIR, tg_name),
+                    cmap="Reds"
+                )
+                image_urls["tg_map"] = {
+                    "url": url_for("output_file", filename=tg_name),
+                    "title": f"Black Globe Temperature ({temp_unit})"
+                }
 
                 tnw_name = make_output_name("tnw")
-                save_map(tnw_c, "Natural Wet Bulb Temperature (°C)", os.path.join(OUTPUT_DIR, tnw_name), cmap="BrBG")
-                image_urls["tnw_map"] = url_for("output_file", filename=tnw_name)
+                save_map(
+                    tnw_display,
+                    f"Natural Wet Bulb Temperature ({temp_unit})",
+                    os.path.join(OUTPUT_DIR, tnw_name),
+                    cmap="BrBG"
+                )
+                image_urls["tnw_map"] = {
+                    "url": url_for("output_file", filename=tnw_name),
+                    "title": f"Natural Wet Bulb Temperature ({temp_unit})"
+                }
 
-                flag_c_name = make_output_name("flag_c")
-                save_flag_map(wbgt_c, os.path.join(OUTPUT_DIR, flag_c_name), unit="C")
-                image_urls["flag_c_map"] = url_for("output_file", filename=flag_c_name)
-
-                flag_f_name = make_output_name("flag_f")
-                save_flag_map(wbgt_f, os.path.join(OUTPUT_DIR, flag_f_name), unit="F")
-                image_urls["flag_f_map"] = url_for("output_file", filename=flag_f_name)
+                flag_name = make_output_name("flag")
+                save_flag_map(
+                    wbgt_display,
+                    os.path.join(OUTPUT_DIR, flag_name),
+                    unit=flag_unit
+                )
+                image_urls["flag_map"] = {
+                    "url": url_for("output_file", filename=flag_name),
+                    "title": f"WBGT Flag Levels ({temp_unit})"
+                }
             else:
                 wbgt_warning = "WBGT step skipped because one or more required rasters or models are missing."
 
@@ -579,11 +1204,14 @@ def index():
         except Exception as e:
             error = str(e)
 
-    return render_template(
-        "index.html",
+    return render_template_string(
+        HTML_TEMPLATE,
         form_data=form_data,
         result=result,
-        error=error
+        error=error,
+        locked_time_label=LOCKED_TIME_LABEL,
+        locked_time_str=LOCKED_TIME_STR,
+        show_input_units=show_input_units,
     )
 
 
