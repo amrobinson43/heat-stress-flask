@@ -1,0 +1,33 @@
+# Render Blueprint. In the Render dashboard: New +  ->  Blueprint, point it at the
+# repo, and it creates this service. Or create a Web Service manually with
+# Runtime = Docker and add the env vars / disk below by hand.
+services:
+  - type: web
+    name: heat-stress-flask
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Free tier (0.1 CPU, no disk, sleeps after 15 min) cannot run this. Starter
+    # is the minimum; Standard (1 CPU / 2 GB) roughly halves the build time.
+    plan: starter
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      # Persists the rendered maps + manifest cache across restarts/deploys.
+      name: wbgt-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: WBGT_STRIDE          # 1 = full resolution (production)
+        value: "1"
+      - key: WBGT_FCST_DAYS
+        value: "3"
+      - key: WBGT_UNITS           # default display unit for the toggle
+        value: "F"
+      - key: WBGT_RUN_TTL         # re-check for a newer NBM run every 6 h (avoids
+        value: "21600"            # rebuilding 3 days every hour as NBM publishes)
+      - key: WBGT_OUTPUT_DIR
+        value: /var/data/outputs
+      - key: WBGT_CACHE_DIR
+        value: /var/data/cache
+      - key: PYTHONUNBUFFERED
+        value: "1"

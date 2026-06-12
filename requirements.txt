@@ -1,0 +1,22 @@
+# --- original science stack (unchanged) ---
+Flask
+numpy
+matplotlib
+rasterio
+scikit-learn
+gunicorn
+
+# --- new: live NBM ingest + roads overlay ---
+requests
+geopandas
+shapely
+pyproj
+
+# --- GRIB2 decoding for NBM ---
+# NOTE: this is the one piece that needs the ecCodes C library at runtime.
+# Locally (conda 'work' env) it is already installed. On Render's pip-only
+# buildpack you will likely need a Dockerfile (micromamba/conda) or the
+# ecmwflibs-backed wheels below. cfgrib is the xarray fallback decoder.
+eccodes
+cfgrib
+xarray

@@ -1,0 +1,9 @@
+.git
+.claude
+__pycache__/
+*.pyc
+*.log
+cache/
+outputs/
+README_FORECAST.md
+current working app pre update.py

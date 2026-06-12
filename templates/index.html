@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Afternoon Heat Stress Prediction Tool</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <h1>Afternoon Heat Stress Prediction Tool</h1>
+      <p>
+        Predict afternoon temperature, dew point, solar radiation, 2 m wind speed,
+        pressure, WBGT, black globe temperature, and natural wet bulb temperature
+        from at-observation inputs.
+      </p>
+    </header>
+
+    <main class="layout">
+      <aside class="panel form-panel">
+        <h2>Inputs</h2>
+
+        <form method="POST">
+          <label>
+            Air temperature at observation (°C)
+            <input type="number" step="any" name="era_tair" value="{{ form_data.era_tair }}" required>
+          </label>
+
+          <label>
+            Dew point at observation (°C)
+            <input type="number" step="any" name="era_dpt" value="{{ form_data.era_dpt }}" required>
+          </label>
+
+          <label>
+            Wind speed at 10 m (m/s)
+            <input type="number" step="any" name="era_wspd" value="{{ form_data.era_wspd }}" required>
+          </label>
+
+          <label>
+            Cloud cover (%)
+            <input type="number" step="any" min="0" max="100" name="era_cloud" value="{{ form_data.era_cloud }}" required>
+          </label>
+
+          <label>
+            Reference mean surface pressure (mb)
+            <input type="number" step="any" name="ref_pressure_mb" value="{{ form_data.ref_pressure_mb }}" required>
+          </label>
+
+          <label>
+            Local date
+            <input type="date" name="date_val" value="{{ form_data.date_val }}" required>
+          </label>
+
+          <label>
+            Local time
+            <input type="time" name="time_val" value="{{ form_data.time_val }}" required>
+          </label>
+
+          <button type="submit">Run prediction</button>
+        </form>
+
+        {% if error %}
+          <div class="message error">
+            <strong>Error:</strong> {{ error }}
+          </div>
+        {% endif %}
+      </aside>
+
+      <section class="panel results-panel">
+        <h2>Results</h2>
+
+        {% if result %}
+          <section class="metrics-section">
+            <h3>Synoptic predictions</h3>
+            <div class="metrics-grid">
+              <div class="metric-card">
+                <span class="metric-label">Temperature min (°C)</span>
+                <span class="metric-value">{{ "%.2f"|format(result.synoptic_predictions.temp_min_C) }}</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Temperature max (°C)</span>
+                <span class="metric-value">{{ "%.2f"|format(result.synoptic_predictions.temp_max_C) }}</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Dew point min (°C)</span>
+                <span class="metric-value">
+                  {% if result.synoptic_predictions.dew_min_C is not none %}
+                    {{ "%.2f"|format(result.synoptic_predictions.dew_min_C) }}
+                  {% else %}
+                    NA
+                  {% endif %}
+                </span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Dew point max (°C)</span>
+                <span class="metric-value">
+                  {% if result.synoptic_predictions.dew_max_C is not none %}
+                    {{ "%.2f"|format(result.synoptic_predictions.dew_max_C) }}
+                  {% else %}
+                    NA
+                  {% endif %}
+                </span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Solar max (W/m²)</span>
+                <span class="metric-value">
+                  {% if result.synoptic_predictions.sol_max_Wm2 is not none %}
+                    {{ "%.1f"|format(result.synoptic_predictions.sol_max_Wm2) }}
+                  {% else %}
+                    NA
+                  {% endif %}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <section class="maps-section">
+            <h3>Continuous fields</h3>
+            <div class="maps-grid">
+              {% if result.image_urls.temp_map %}
+                <div class="map-card">
+                  <h4>Temperature (°C)</h4>
+                  <img src="{{ result.image_urls.temp_map }}" alt="Temperature map">
+                </div>
+              {% endif %}
+
+              {% if result.image_urls.dew_map %}
+                <div class="map-card">
+                  <h4>Dew Point (°C)</h4>
+                  <img src="{{ result.image_urls.dew_map }}" alt="Dew point map">
+                </div>
+              {% endif %}
+
+              {% if result.image_urls.sol_map %}
+                <div class="map-card">
+                  <h4>Solar Radiation (W/m²)</h4>
+                  <img src="{{ result.image_urls.sol_map }}" alt="Solar radiation map">
+                </div>
+              {% endif %}
+
+              {% if result.image_urls.u2_map %}
+                <div class="map-card">
+                  <h4>Wind Speed at 2 m (m/s)</h4>
+                  <img src="{{ result.image_urls.u2_map }}" alt="Wind speed map">
+                </div>
+              {% endif %}
+
+              {% if result.image_urls.pressure_map %}
+                <div class="map-card">
+                  <h4>Surface Pressure (mb)</h4>
+                  <img src="{{ result.image_urls.pressure_map }}" alt="Pressure map">
+                </div>
+              {% endif %}
+            </div>
+          </section>
+
+          {% if result.wbgt_warning %}
+            <div class="message warning">
+              {{ result.wbgt_warning }}
+            </div>
+          {% endif %}
+
+          {% if result.image_urls.wbgt_map %}
+            <section class="maps-section">
+              <h3>WBGT fields</h3>
+              <div class="maps-grid">
+                <div class="map-card">
+                  <h4>WBGT (°C)</h4>
+                  <img src="{{ result.image_urls.wbgt_map }}" alt="WBGT map">
+                </div>
+
+                <div class="map-card">
+                  <h4>Black Globe Temperature (°C)</h4>
+                  <img src="{{ result.image_urls.tg_map }}" alt="Black globe temperature map">
+                </div>
+
+                <div class="map-card">
+                  <h4>Natural Wet Bulb Temperature (°C)</h4>
+                  <img src="{{ result.image_urls.tnw_map }}" alt="Natural wet bulb map">
+                </div>
+
+                <div class="map-card">
+                  <h4>WBGT Flag Levels (°C)</h4>
+                  <img src="{{ result.image_urls.flag_c_map }}" alt="WBGT flag map Celsius">
+                </div>
+
+                <div class="map-card">
+                  <h4>WBGT Flag Levels (°F)</h4>
+                  <img src="{{ result.image_urls.flag_f_map }}" alt="WBGT flag map Fahrenheit">
+                </div>
+              </div>
+            </section>
+          {% endif %}
+
+          <section class="json-section">
+            <h3>Summary JSON</h3>
+            <pre>{{ result.summary | tojson(indent=2) }}</pre>
+          </section>
+        {% else %}
+          <p class="placeholder">
+            Enter inputs and click <strong>Run prediction</strong> to generate maps and summary output.
+          </p>
+        {% endif %}
+      </section>
+    </main>
+  </div>
+</body>
+</html>
