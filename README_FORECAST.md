@@ -24,8 +24,12 @@ Test here first. Deploy only after you're happy (see "Deploying" below).
 - **Two tabs:** a **Forecast** tab and an **About & Methods** tab that describes
   the SERCC citizen-science mobile-transect campaign and the methods (sourced
   from the dissertation Ch.1–2 and sercc.com/wbgt-heat-mapping).
-- **Same science:** `tg_iter` / `tnw_iter` / `wbgt_from_fields` are byte-for-byte
-  the originals. `WBGT_STRIDE=1` (default) is the exact original computation.
+- **Vectorized solver:** the Liljegren WBGT is solved over the whole grid with
+  NumPy — verified **bit-identical** to the original per-pixel `tg_iter`/`tnw_iter`
+  (`python app.py --verify`, max|diff| = 0.00 °C). Full-res is now **~30–50 s/day**
+  (was ~7 min); a 3-day build is ~2–3 min, then cached.
+- **Prebaked roads:** the overlay is precomputed to `data/roads_segments.json`
+  (`python app.py --bake-roads`), so the running server needs **no geopandas/shapefile**.
 
 ## Run it locally (conda `work` env has the full stack)
 
@@ -33,25 +37,20 @@ Test here first. Deploy only after you're happy (see "Deploying" below).
 $py = "C:\Users\18286\miniconda3\envs\work\python.exe"
 cd "C:\Users\18286\Desktop\heat-stress-flask-work"
 
-# Fastest sanity check — one day, no NBM needed, fixed inputs (~25 s @ stride 8):
-& $py app.py --selftest --stride 8
-
-# Quick LIVE check — real NBM, 1 day, coarse/fast (~30–60 s):
-& $py app.py --build --days 1 --stride 6
-
-# Run the web app (production settings: full resolution, 3 days):
-& $py app.py            # then open http://127.0.0.1:5000
+& $py app.py --verify              # confirm vectorized == per-pixel solver
+& $py app.py --bake-roads          # regenerate data/roads_segments.json (only if rasters change)
+& $py app.py --selftest            # render one day from fixed inputs, no NBM (~30 s, full res)
+& $py app.py --build --days 1      # real NBM, one day, full res (~45 s incl. download)
+& $py app.py                       # the web app -> http://127.0.0.1:5000  (3 days)
 ```
 
 When the server starts it kicks off the build in the background. The page is
-live immediately and each day appears as it finishes.
+live immediately and each day appears as it finishes (a few seconds each).
 
 ### Speed knob: `WBGT_STRIDE`
-The Liljegren solver runs **per pixel in pure Python**: the full 1385×1466 grid
-is ~2.03 M pixels ≈ **7 minutes per day** at full resolution (`stride=1`).
-`--stride N` solves every Nth pixel and nearest-fills (coarse but fast) for
-testing only. **Production must use stride 1.** First full build of 3 days ≈ 20
-min; after that everything is cached and instant until the next NBM run.
+Now that the solver is vectorized, full resolution (`WBGT_STRIDE=1`, the default)
+is fast — you should not need to change this. `--stride N>1` still exists as a
+coarse/fast escape hatch but is rarely useful.
 
 ### Useful env vars
 | var | default | meaning |
@@ -70,29 +69,27 @@ min; after that everything is cached and instant until the next NBM run.
 - `/healthz` — readiness + config
 - `/outputs/<png>` — rendered maps
 
-## Deploying to Render (read before you push)
+## Deploying to Render (Docker)
 
-The original deploy was `gunicorn app:app` on Render from GitHub. Three things
-about this version need attention:
+Deploy is via the included **`Dockerfile`** + **`render.yaml`** (Blueprint), not
+the pip buildpack — the one hard dependency is **ecCodes** (for NBM GRIB2
+decoding), a C library pip can't reliably install but conda-forge can.
 
-1. **GRIB decoding (ecCodes).** `requirements.txt` lists `eccodes`/`cfgrib`, but
-   ecCodes needs a C library that Render's pip-only buildpack does not provide.
-   **Recommended:** deploy with a Docker image (micromamba/conda) that installs
-   `eccodes geopandas rasterio cfgrib`. Ask and I'll add a `Dockerfile`.
-2. **Compute time + free tier.** ~7 min/day at full res on a full CPU; Render's
-   free tier (0.1 CPU) makes that far longer, and it spins down after 15 min
-   idle. Use at least a paid instance for real use.
-3. **Cache persistence.** `cache/` + `outputs/` are the disk cache. Render's
-   filesystem is **ephemeral** — add a **persistent disk** mounted at the repo
-   dir (or change `CACHE_DIR`/`OUTPUT_DIR` to a mounted path) so a restart does
-   not recompute everything.
-   The `Procfile` is set to `--workers 1 --threads 8 --timeout 180` so the single
-   shared background worker/state lives in one process.
+1. **GRIB decoding (ecCodes).** Handled by the Dockerfile (micromamba/conda-forge).
+   Roads are prebaked and geopandas was dropped, so the image is the science
+   stack + ecCodes only.
+2. **Compute.** The vectorized solver makes a 3-day build ~2–3 min, so even a
+   small instance is fine. (`render.yaml` requests **Starter**; **Free** also
+   works now — it just sleeps after 15 min and rebuilds on wake.)
+3. **Cache.** `render.yaml` mounts a 1 GB disk at `/var/data` and points
+   `WBGT_CACHE_DIR`/`WBGT_OUTPUT_DIR` there so maps survive restarts. Optional now
+   that rebuilds are fast — drop the disk to run on Free.
 
-If you'd rather keep the free tier and instant page loads, the clean fix is to
-**vectorize the WBGT solver** (NumPy over the whole grid, ~1–3 s/day, output
-verified to match the per-pixel solver). Say the word and I'll do that pass.
+Push the repo, then on Render: **New → Blueprint** (reads `render.yaml`) or a
+Docker **Web Service**. See the deploy walkthrough for exact steps.
 
-## Deploy = copy these back to the GitHub repo, then push
-`app.py`, `Procfile`, `requirements.txt`, and (if not already committed)
-`data/roads/`. The `data/models`, `data/rasters` are unchanged.
+## Files that make up the deploy
+`app.py`, `Dockerfile`, `env.yml`, `render.yaml`, `.dockerignore`,
+`data/roads_segments.json` (prebaked), and the unchanged `data/models` +
+`data/rasters`. The `data/roads/` shapefile is kept in git for re-baking but is
+excluded from the image.

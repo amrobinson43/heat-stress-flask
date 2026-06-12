@@ -1,4 +1,7 @@
-# --- original science stack (unchanged) ---
+# Deploy uses the Dockerfile + env.yml (conda-forge), not this file. Kept for
+# reference / a native-buildpack attempt.
+#
+# --- original science stack ---
 Flask
 numpy
 matplotlib
@@ -6,17 +9,16 @@ rasterio
 scikit-learn
 gunicorn
 
-# --- new: live NBM ingest + roads overlay ---
+# --- live NBM ingest ---
 requests
-geopandas
-shapely
 pyproj
 
-# --- GRIB2 decoding for NBM ---
-# NOTE: this is the one piece that needs the ecCodes C library at runtime.
-# Locally (conda 'work' env) it is already installed. On Render's pip-only
-# buildpack you will likely need a Dockerfile (micromamba/conda) or the
-# ecmwflibs-backed wheels below. cfgrib is the xarray fallback decoder.
+# --- GRIB2 decoding for NBM (needs the ecCodes C library -> use the Dockerfile) ---
 eccodes
 cfgrib
 xarray
+
+# --- dev only: building data/roads_segments.json via `python app.py --bake-roads`.
+#     NOT needed at runtime (the server reads the prebaked JSON). ---
+# geopandas
+# shapely

@@ -7,3 +7,6 @@ cache/
 outputs/
 README_FORECAST.md
 current working app pre update.py
+# roads are prebaked to data/roads_segments.json; the shapefile + geopandas are
+# not needed in the running image (only for re-baking offline).
+data/roads/

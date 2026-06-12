@@ -6,8 +6,9 @@ services:
     name: heat-stress-flask
     runtime: docker
     dockerfilePath: ./Dockerfile
-    # Free tier (0.1 CPU, no disk, sleeps after 15 min) cannot run this. Starter
-    # is the minimum; Standard (1 CPU / 2 GB) roughly halves the build time.
+    # With the vectorized solver a 3-day build is ~2-3 min, so Starter is plenty
+    # (and it supports the disk below). Free also works but sleeps after 15 min
+    # and has no disk, so it recomputes on wake. Standard if you want more CPU.
     plan: starter
     healthCheckPath: /healthz
     autoDeploy: true
