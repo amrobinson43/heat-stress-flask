@@ -18,4 +18,8 @@ ENV PORT=10000 PYTHONUNBUFFERED=1
 EXPOSE 10000
 
 # 1 worker so the single background build thread + in-memory state are shared.
-CMD gunicorn app:app --workers 1 --threads 8 --timeout 180 --bind 0.0.0.0:${PORT}
+# --timeout 0 disables the worker timeout: the forecast build runs in a daemon
+# thread inside this worker and can take many minutes on a small/free instance,
+# and we must NOT let gunicorn kill+restart the worker (which would abort the
+# build and reset state). Requests themselves are fast (the build is off-thread).
+CMD gunicorn app:app --workers 1 --threads 8 --timeout 0 --bind 0.0.0.0:${PORT}

@@ -18,7 +18,9 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    healthCheckPath: /healthz
+    # No healthCheckPath on purpose: Render then uses a simple port-open check.
+    # An HTTP health check could fail while the CPU-heavy build holds the worker
+    # on a 0.1-CPU free instance, and Render would restart the service mid-build.
     autoDeploy: true
     envVars:
       - key: WBGT_STRIDE          # 1 = full resolution

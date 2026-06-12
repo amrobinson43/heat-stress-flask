@@ -1816,7 +1816,7 @@ function renderPanel(){
   const day=STATE.days.find(d=>d.date_key===active) || STATE.days[0];
   if(day.status!=='done'){
     let msg = day.status==='error' ? ('<b>Could not build this day.</b> '+(day.error||''))
-            : (day.status==='computing' ? '<span class="spinner"></span>Computing this day&rsquo;s WBGT maps &mdash; they will appear here automatically in a few seconds.'
+            : (day.status==='computing' ? '<span class="spinner"></span>Computing this day&rsquo;s WBGT maps &mdash; they appear here automatically (a few minutes on a small free instance; faster on a paid one).'
             : 'Queued &mdash; waiting for an earlier day to finish.');
     panel.appendChild(el('div',{class:'banner '+(day.status==='error'?'err':'info')}, msg));
     return;
@@ -1913,14 +1913,39 @@ poll();
 # ================================
 # Routes
 # ================================
+_KICK_LOCK = threading.Lock()
+_KICK_THREAD = None
+
+
+def _kick_forecast():
+    """Start the detect+build orchestration in a background thread so the web
+    request never blocks on it (detection does network I/O; the build is heavy).
+    No-op if an orchestration is already in flight."""
+    global _KICK_THREAD
+    with _KICK_LOCK:
+        if _KICK_THREAD is not None and _KICK_THREAD.is_alive():
+            return
+        with _STATE_LOCK:
+            if FORECAST_STATE["status"] in ("idle", "error"):
+                FORECAST_STATE["status"] = "detecting"
+                FORECAST_STATE["building"] = True
+                FORECAST_STATE["message"] = ""
+
+        def _run():
+            try:
+                ensure_forecast()
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                _state_set(status="error", building=False, message=str(exc))
+
+        _KICK_THREAD = threading.Thread(target=_run, daemon=True)
+        _KICK_THREAD.start()
+
+
 @app.route("/")
 def index():
-    try:
-        ensure_forecast()
-    except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        _state_set(status="error", message=str(exc))
+    _kick_forecast()
     return render_template_string(HTML_TEMPLATE, initial_state=_public_state())
 
 
@@ -1953,9 +1978,13 @@ def healthz():
         bbox = get_nbm_bbox()
     except Exception as exc:
         return jsonify(ok=False, error=str(exc)), 503
+    # The overlay renders from the prebaked JSON (the shapefile is excluded from
+    # the image), so report that, not just the shapefile.
+    roads_ok = os.path.exists(ROADS_SEGMENTS_JSON) or os.path.exists(ROADS_SHP)
     return jsonify(ok=True, schema=RENDER_SCHEMA, default_unit=DEFAULT_UNIT, stride=WBGT_STRIDE,
                    forecast_days=N_FORECAST_DAYS, nbm_bbox=bbox,
-                   roads=os.path.exists(ROADS_SHP), state=_public_state())
+                   roads=roads_ok, roads_baked=os.path.exists(ROADS_SEGMENTS_JSON),
+                   state=_public_state())
 
 
 # ================================
