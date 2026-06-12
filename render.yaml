@@ -1,34 +1,33 @@
-# Render Blueprint. In the Render dashboard: New +  ->  Blueprint, point it at the
-# repo, and it creates this service. Or create a Web Service manually with
-# Runtime = Docker and add the env vars / disk below by hand.
+# Render Blueprint (Free tier). In the Render dashboard: New + -> Blueprint,
+# point it at this repo, Apply. Or create a Web Service manually with
+# Runtime = Docker, plan Free, and the env vars below.
+#
+# Free notes: no card required, no persistent disk, and the service sleeps after
+# ~15 min idle -> the next visitor waits while it wakes and rebuilds the forecast
+# (a few minutes on the 0.1 CPU free instance). The cache lives on the ephemeral
+# container filesystem (rebuilt on each wake). For an always-on, instant tool,
+# switch plan to `starter` and add a disk (see git history of this file).
+#
+# The service name is intentionally NOT "heat-stress-flask" so this does not
+# collide with the existing Python service of that name. Verify this one at
+# https://heat-stress-flask-nbm.onrender.com, then rename/swap to take the
+# original URL if you want it.
 services:
   - type: web
-    name: heat-stress-flask
+    name: heat-stress-flask-nbm
     runtime: docker
     dockerfilePath: ./Dockerfile
-    # With the vectorized solver a 3-day build is ~2-3 min, so Starter is plenty
-    # (and it supports the disk below). Free also works but sleeps after 15 min
-    # and has no disk, so it recomputes on wake. Standard if you want more CPU.
-    plan: starter
+    plan: free
     healthCheckPath: /healthz
     autoDeploy: true
-    disk:
-      # Persists the rendered maps + manifest cache across restarts/deploys.
-      name: wbgt-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
-      - key: WBGT_STRIDE          # 1 = full resolution (production)
+      - key: WBGT_STRIDE          # 1 = full resolution
         value: "1"
       - key: WBGT_FCST_DAYS
         value: "3"
       - key: WBGT_UNITS           # default display unit for the toggle
         value: "F"
-      - key: WBGT_RUN_TTL         # re-check for a newer NBM run every 6 h (avoids
-        value: "21600"            # rebuilding 3 days every hour as NBM publishes)
-      - key: WBGT_OUTPUT_DIR
-        value: /var/data/outputs
-      - key: WBGT_CACHE_DIR
-        value: /var/data/cache
+      - key: WBGT_RUN_TTL         # re-check for a newer NBM run every 6 h
+        value: "21600"
       - key: PYTHONUNBUFFERED
         value: "1"
