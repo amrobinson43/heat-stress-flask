@@ -1761,7 +1761,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="view-forecast">
   <div class="card">
     <h1>Live afternoon heat-stress forecast</h1>
-    <p class="sub">Real <b>2&ndash;3&nbsp;PM</b> Wet Bulb Globe Temperature (WBGT) for the next few days at <b>10&nbsp;m</b> resolution, driven automatically by the National&nbsp;Blend&nbsp;of&nbsp;Models (NBM) forecast &mdash; no manual inputs. Heat stress is solved with the Liljegren&nbsp;et&nbsp;al. (2008) energy balance and classified by NCHSAA flag levels. Black lines are roads. See <a href="#" data-goto="about">About &amp; Methods</a> for how the underlying maps were built.</p>
+    <p class="sub">Real <b>2&ndash;3&nbsp;PM</b> Wet Bulb Globe Temperature (WBGT) for the next few days across Carrboro and Chapel Hill, generated automatically from the National&nbsp;Blend&nbsp;of&nbsp;Models (NBM) forecast. Heat stress is solved with the Liljegren&nbsp;et&nbsp;al. (2008) energy balance and classified by NCHSAA flag levels; black lines are roads. This live tool renders at roughly <b>100&nbsp;m</b>; the underlying research resolves WBGT at 10&nbsp;m. See <a href="#" data-goto="about">About &amp; Methods</a>.</p>
     <div class="pills">
       <span class="pill" id="pill-run">NBM run: &mdash;</span>
       <span class="pill">Window: 2&ndash;3&nbsp;PM (climatological WBGT peak)</span>
@@ -1783,7 +1783,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <h1>About this tool &amp; how the maps are made</h1>
     <p class="sub">This application turns a broad weather forecast into a block-by-block picture of afternoon heat stress across Carrboro and Chapel Hill. It is built on the Southeast Regional Climate Center&rsquo;s (SERCC) citizen-science heat-mapping campaign and the doctoral research of Andrew Robinson (UNC Chapel Hill, advisor Dr.&nbsp;Charles Konrad).</p>
     <div class="chips">
-      <div class="chip"><b>10 m</b><span>map resolution</span></div>
+      <div class="chip"><b>~100 m</b><span>live forecast grid</span></div>
       <div class="chip"><b>2:15 PM</b><span>climatological WBGT peak</span></div>
       <div class="chip"><b>2024&ndash;2025</b><span>heat-season campaign</span></div>
       <div class="chip"><b>Walk · Bike · Drive</b><span>mobile transects</span></div>
@@ -1842,7 +1842,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <ol class="steps">
       <li><b>Land-surface predictors.</b> Physically meaningful rasters &mdash; tree canopy, impervious surface, building volume, albedo, sky-view factor, elevation, slope, aspect, and distance to road (from NLCD, USGS, and Google Earth Engine) &mdash; plus <b>focal-distance</b> versions averaged over 30&ndash;990&nbsp;m to capture each location&rsquo;s neighborhood context.</li>
       <li><b>Machine learning.</b> Random-forest regressions (scikit-learn, 100 trees) learn how those surfaces shape air temperature, dew point, and solar radiation, trained on 90% of transect points and validated on the rest (R&sup2; &asymp; 0.85&ndash;0.99 for temperature and dew point).</li>
-      <li><b>Wind &amp; pressure.</b> 10&nbsp;m wind from the NCEconet station is downscaled to 2&nbsp;m with a surface-roughness logarithmic law (forests slow the wind, open ground does not); pressure is estimated from elevation via the hypsometric equation.</li>
+      <li><b>Wind &amp; pressure.</b> The NBM forecasts wind speed at the standard <b>10&nbsp;m</b> height; it is downscaled <b>vertically to the 2&nbsp;m</b> height at which heat stress is experienced using a surface-roughness logarithmic wind profile, so rougher surfaces (forest, dense development) slow the near-surface wind more than open ground. Surface pressure is estimated from elevation via the hypsometric equation.</li>
       <li><b>WBGT energy balance.</b> Air temperature, humidity, solar, wind, and pressure feed the Liljegren&nbsp;et&nbsp;al. (2008) outdoor WBGT model, solved iteratively at every pixel for natural wet-bulb and black-globe temperature, then combined into WBGT and NCHSAA flag levels.</li>
     </ol>
   </div>
@@ -1852,10 +1852,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <p>The campaign established the <b>persistent spatial fingerprint</b> of heat stress &mdash; which blocks run hot and which stay cool, and how that pattern shifts with the weather. This tool puts that fingerprint to work on tomorrow&rsquo;s weather:</p>
     <ul class="tight">
       <li>For each of the next few days, the app pulls the <b>NBM forecast</b> over the study area for the 2&ndash;3&nbsp;PM window and reduces it to the broad ambient conditions (air temperature, dew point, wind, cloud).</li>
-      <li>Models translate those broad conditions into the day&rsquo;s expected neighborhood range, and the observed spatial structure is scaled between them to produce 10&nbsp;m air-temperature, dew-point, and solar fields.</li>
+      <li>Models translate those broad conditions into the day&rsquo;s expected neighborhood range, and the observed spatial structure is scaled between them to map air temperature, dew point, and solar radiation.</li>
       <li>The Liljegren energy balance then yields the WBGT, black-globe, and natural-wet-bulb maps, classified into flag levels &mdash; the same science the field campaign was built to support, now run forward on a live forecast.</li>
     </ul>
-    <div class="note"><b>Best use &amp; limits.</b> The tool is most reliable when forecast conditions resemble the heat-season days it was trained on, and it is designed for the early-afternoon (around 2:15&nbsp;PM) heat peak. It is a research and situational-awareness tool &mdash; not a substitute for official National Weather Service heat products or <a href="https://www.heat.gov/" target="_blank" rel="noopener">heat.gov</a> guidance.</div>
+    <div class="note"><b>Resolution.</b> Robinson&rsquo;s dissertation resolves these fields at 10&nbsp;m; this hosted forecast renders at roughly 100&nbsp;m so it runs within its server&rsquo;s memory while staying responsive. <b>Best use &amp; limits.</b> The tool is most reliable when forecast conditions resemble the heat-season days it was trained on, and it is designed for the early-afternoon (around 2:15&nbsp;PM) heat peak. It is a research and situational-awareness tool &mdash; not a substitute for official National Weather Service heat products or <a href="https://www.heat.gov/" target="_blank" rel="noopener">heat.gov</a> guidance.</div>
   </div>
 
   <div class="card">
@@ -1870,7 +1870,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<footer>Liljegren WBGT &middot; NBM live forecast &middot; SERCC mobile-transect campaign &middot; 10&nbsp;m grid with roads overlay</footer>
+<footer>Liljegren WBGT &middot; NBM live forecast &middot; SERCC mobile-transect campaign &middot; ~100&nbsp;m grid with roads overlay</footer>
 </div>
 
 <script>
