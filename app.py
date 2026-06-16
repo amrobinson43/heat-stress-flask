@@ -158,8 +158,14 @@ DEFAULT_UNIT = os.environ.get("WBGT_UNITS", "F").upper()
 if DEFAULT_UNIT not in ("C", "F"):
     DEFAULT_UNIT = "F"
 
+# Target grid resolution (meters). The input z-rasters are 10 m, but WBGT and its
+# sub-variables (NWB, Tg) are meaningful at ~100 m, so we resample every input to
+# this resolution on load. That cuts the pixel count ~100x (≈2.03 M -> ~20 k),
+# which is the main compute lever. Set to 10 to keep native resolution.
+TARGET_RES_M = float(os.environ.get("WBGT_TARGET_RES_M", "100"))
+
 # Resolution knob for the heavy WBGT solve. 1 = full resolution (production).
-# Larger = coarse/fast smoke test (e.g. WBGT_STRIDE=8 for a quick local check).
+# Larger = coarse/fast smoke test. Rarely needed now (vectorized + 100 m grid).
 WBGT_STRIDE = max(1, int(os.environ.get("WBGT_STRIDE", "1")))
 
 RENDER_SCHEMA = "wbgt-nbm-forecast-v2"
@@ -306,19 +312,77 @@ def load_models():
 def read_raster(path):
     with rasterio.open(path) as src:
         arr = src.read(1).astype(np.float32)
+        if src.nodata is not None:
+            arr = np.where(arr == src.nodata, np.nan, arr)
         meta = src.meta.copy()
     return arr, meta
+
+
+def _coarsen_factor(meta):
+    """How many native pixels make up one TARGET_RES_M pixel (>=1)."""
+    native = abs(meta["transform"].a)
+    return max(1, int(round(TARGET_RES_M / native))) if native > 0 else 1
+
+
+def _target_meta(meta, factor):
+    """Template meta downsampled by `factor` (same CRS/extent, coarser grid)."""
+    if factor <= 1:
+        return meta
+    t = meta["transform"]
+    w = int(math.ceil(meta["width"] / factor))
+    h = int(math.ceil(meta["height"] / factor))
+    dst = dict(meta)
+    dst["transform"] = type(t)(t.a * factor, t.b, t.c, t.d, t.e * factor, t.f)
+    dst["width"], dst["height"] = w, h
+    return dst
+
+
+def _resample_to(arr, src_meta, dst_meta, resampling=Resampling.average):
+    if arr is None:
+        return None
+    dst = np.full((dst_meta["height"], dst_meta["width"]), np.nan, dtype=np.float32)
+    reproject(
+        source=arr, destination=dst,
+        src_transform=src_meta["transform"], src_crs=src_meta["crs"],
+        dst_transform=dst_meta["transform"], dst_crs=dst_meta["crs"],
+        src_nodata=np.nan, dst_nodata=np.nan, resampling=resampling,
+    )
+    return dst
 
 
 def load_rasters():
     if rasterio is None:
         raise RuntimeError("rasterio is not installed.")
-    rasters = {}
-    rasters["ta_z"], rasters["meta"] = read_raster(TA_Z_TIF)
-    rasters["td_z"], _ = read_raster(TD_Z_TIF) if os.path.exists(TD_Z_TIF) else (None, None)
-    rasters["sol_z"], _ = read_raster(SOL_Z_TIF) if os.path.exists(SOL_Z_TIF) else (None, None)
-    rasters["z0"], rasters["z0_meta"] = read_raster(ROUGHNESS_TIF) if os.path.exists(ROUGHNESS_TIF) else (None, None)
-    rasters["elev"], rasters["elev_meta"] = read_raster(ELEV_TIF) if os.path.exists(ELEV_TIF) else (None, None)
+    ta_z, tmpl = read_raster(TA_Z_TIF)
+    factor = _coarsen_factor(tmpl)
+    dst_meta = _target_meta(tmpl, factor)
+
+    def _load(path):
+        if not os.path.exists(path):
+            return None
+        arr, m = read_raster(path)
+        # Resample onto the common target grid (handles both coarsening and any
+        # source that isn't already on the ta_z grid).
+        if factor <= 1 and m["transform"] == dst_meta["transform"] \
+                and m["width"] == dst_meta["width"] and m["height"] == dst_meta["height"]:
+            return arr
+        return _resample_to(arr, m, dst_meta)
+
+    rasters = {
+        "meta": dst_meta,
+        "ta_z": ta_z if factor <= 1 else _resample_to(ta_z, tmpl, dst_meta),
+        "td_z": _load(TD_Z_TIF),
+        "sol_z": _load(SOL_Z_TIF),
+        "z0": _load(ROUGHNESS_TIF),
+        "elev": _load(ELEV_TIF),
+    }
+    # Everything is now on dst_meta's grid, so the align checks downstream no-op.
+    rasters["z0_meta"] = dst_meta if rasters["z0"] is not None else None
+    rasters["elev_meta"] = dst_meta if rasters["elev"] is not None else None
+    if NBM_DEBUG:
+        print("Rasters at {:.0f} m (x{} coarsen): {}x{} = {} px".format(
+            abs(dst_meta["transform"].a), factor, dst_meta["height"],
+            dst_meta["width"], dst_meta["height"] * dst_meta["width"]))
     return rasters
 
 
@@ -798,7 +862,7 @@ def save_map(arr, title, out_path, cmap="viridis", roads=None):
     ax.set_yticks([])
     plt.colorbar(im, ax=ax, shrink=0.8)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -822,7 +886,7 @@ def save_flag_map(wbgt_array, out_path, unit="C", roads=None):
     ax.set_yticks([])
     plt.colorbar(im, ax=ax, shrink=0.8, ticks=bounds)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1288,7 +1352,7 @@ def _raster_stamp():
 def _signature():
     return {
         "schema": RENDER_SCHEMA, "roads": ROAD_OVERLAY_VERSION,
-        "stride": WBGT_STRIDE, "raster_stamp": _raster_stamp(),
+        "stride": WBGT_STRIDE, "res_m": TARGET_RES_M, "raster_stamp": _raster_stamp(),
     }
 
 
@@ -2006,8 +2070,12 @@ def _cli_verify():
     td = np.minimum(td, ta)
     dt_local = datetime(2026, 7, 15, 14, 15)
 
-    # Compare on a crop (the scalar solver is slow) of meaningful size.
-    sl = (slice(300, 480), slice(300, 480))
+    # Compare on a centered crop (the scalar solver is slow), clamped to the
+    # actual grid so it works at any resolution.
+    H, W = ta.shape
+    ch, cw = min(150, H), min(150, W)
+    r0, c0 = (H - ch) // 2, (W - cw) // 2
+    sl = (slice(r0, r0 + ch), slice(c0, c0 + cw))
     a = [x[sl] for x in (ta, td, sol, pmap, u2)]
     t0 = time.time()
     ws_s, tg_s, tn_s = _wbgt_from_fields_scalar(*a, dt_local)
