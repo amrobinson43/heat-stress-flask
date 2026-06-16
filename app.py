@@ -25,6 +25,7 @@ solver (tg_iter / tnw_iter / wbgt_from_fields) is untouched.
 """
 
 import argparse
+import gc
 import json
 import math
 import os
@@ -998,7 +999,15 @@ def find_latest_nbm_run(session, look_back_hours=14):
     return None
 
 
-def _read_grib_message_eccodes(data_bytes, tmp_dir):
+# The NBM grid is identical for every message/hour/forecast-hour of a run, so the
+# bbox mask is computed from lat/lon ONCE and cached. Every NBM message carries the
+# full CONUS grid (~3.7 M points ≈ 30 MB per array), so reading lat/lon for each
+# message was the memory spike (peaked ~460 MB) -> after the first message we decode
+# values only and reuse the cached mask.
+_NBM_GRID = {"mask": None, "n": None, "key": None}
+
+
+def _read_grib_message_eccodes(data_bytes, tmp_dir, want_latlon=True):
     _configure_eccodes_runtime()
     try:
         import eccodes
@@ -1015,11 +1024,13 @@ def _read_grib_message_eccodes(data_bytes, tmp_dir):
                 gid = eccodes.codes_grib_new_from_file(f)
                 if gid is None:
                     return None, None, None
-                vals = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64)
+                vals = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64).flatten()
+                if not want_latlon:
+                    return None, None, vals
                 lats = np.asarray(eccodes.codes_get_array(gid, "latitudes"), dtype=np.float64)
                 lons = np.asarray(eccodes.codes_get_array(gid, "longitudes"), dtype=np.float64)
         lons = np.where(lons > 180.0, lons - 360.0, lons)
-        return lats.flatten(), lons.flatten(), vals.flatten()
+        return lats.flatten(), lons.flatten(), vals
     except Exception as exc:
         print("WARN: ecCodes GRIB decode failed: {}".format(exc))
         return None, None, None
@@ -1035,7 +1046,7 @@ def _read_grib_message_eccodes(data_bytes, tmp_dir):
             pass
 
 
-def _read_grib_message_cfgrib(data_bytes, tmp_dir):
+def _read_grib_message_cfgrib(data_bytes, tmp_dir, want_latlon=True):
     try:
         import xarray as xr
     except Exception:
@@ -1051,15 +1062,21 @@ def _read_grib_message_cfgrib(data_bytes, tmp_dir):
             except Exception:
                 return None, None, None
             try:
-                if not list(ds.data_vars) or "latitude" not in ds.coords or "longitude" not in ds.coords:
+                if not list(ds.data_vars):
+                    return None, None, None
+                if want_latlon and ("latitude" not in ds.coords or "longitude" not in ds.coords):
                     return None, None, None
                 v = list(ds.data_vars)[0]
                 vals = np.asarray(ds[v].values).flatten()
-                lats = np.asarray(ds["latitude"].values).flatten()
-                lons = np.asarray(ds["longitude"].values).flatten()
+                if want_latlon:
+                    lats = np.asarray(ds["latitude"].values).flatten()
+                    lons = np.asarray(ds["longitude"].values).flatten()
+                else:
+                    lats = lons = None
             finally:
                 ds.close()
-        lons = np.where(lons > 180.0, lons - 360.0, lons)
+        if lons is not None:
+            lons = np.where(lons > 180.0, lons - 360.0, lons)
         return lats, lons, vals
     finally:
         for fn in os.listdir(tmp_dir):
@@ -1071,16 +1088,17 @@ def _read_grib_message_cfgrib(data_bytes, tmp_dir):
                     pass
 
 
-def _read_grib_message(data_bytes, tmp_dir):
-    lats, lons, vals = _read_grib_message_eccodes(data_bytes, tmp_dir)
-    if lats is not None:
+def _read_grib_message(data_bytes, tmp_dir, want_latlon=True):
+    lats, lons, vals = _read_grib_message_eccodes(data_bytes, tmp_dir, want_latlon)
+    if vals is not None:
         return lats, lons, vals
-    return _read_grib_message_cfgrib(data_bytes, tmp_dir)
+    return _read_grib_message_cfgrib(data_bytes, tmp_dir, want_latlon)
 
 
 def fetch_nbm_hour_points(session, run_dt, fhr, bbox, tmp_dir):
     """Return {alias: 1-D array of bbox-subset values} for one NBM forecast hour,
-    or None if not available."""
+    or None if not available. Memory-frugal: decodes the full CONUS lat/lon grid
+    once (cached mask), then values-only for every other message."""
     idx_text, vi = fetch_idx(session, run_dt, fhr)
     if idx_text is None:
         return None
@@ -1089,7 +1107,7 @@ def fetch_nbm_hour_points(session, run_dt, fhr, bbox, tmp_dir):
     if not ranges:
         return None
 
-    lat_arr = mask = None
+    bbox_key = (bbox["lat_min"], bbox["lat_max"], bbox["lon_min"], bbox["lon_max"])
     point_data = {}
     for var, level, start, end, alias in ranges:
         headers = dict(HEADERS)
@@ -1101,22 +1119,28 @@ def fetch_nbm_hour_points(session, run_dt, fhr, bbox, tmp_dir):
             continue
         if rr.status_code not in (200, 206):
             continue
-        lats, lons, vals = _read_grib_message(rr.content, tmp_dir)
-        if lats is None:
+        need_grid = _NBM_GRID["mask"] is None or _NBM_GRID["key"] != bbox_key
+        lats, lons, vals = _read_grib_message(rr.content, tmp_dir, want_latlon=need_grid)
+        if vals is None:
             continue
-        if mask is None:
-            lat_arr = lats
+        if need_grid:
+            if lats is None:
+                continue
             mask = ((lats >= bbox["lat_min"]) & (lats <= bbox["lat_max"]) &
                     (lons >= bbox["lon_min"]) & (lons <= bbox["lon_max"]))
+            del lats, lons
             if not mask.any():
                 return None
-        if vals.shape != lat_arr.shape:
-            continue
-        point_data[alias] = vals[mask]
+            _NBM_GRID.update(mask=mask, n=int(mask.sum()), key=bbox_key)
+        mask = _NBM_GRID["mask"]
+        if vals.shape[0] == mask.shape[0]:
+            point_data[alias] = vals[mask]           # small bbox-subset copy
+        del vals
+    gc.collect()
 
-    if mask is None or "Ta_K" not in point_data:
+    if "Ta_K" not in point_data:
         return None
-    point_data["_n"] = int(mask.sum())
+    point_data["_n"] = _NBM_GRID["n"]
     return point_data
 
 
