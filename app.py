@@ -1007,6 +1007,27 @@ def find_latest_nbm_run(session, look_back_hours=14):
 _NBM_GRID = {"mask": None, "n": None, "key": None}
 
 
+def _undo_alt_row_scan(eccodes, gid, vals):
+    """NBM uses alternativeRowScanning (boustrophedon; scanningMode 80): the raw
+    codes_get_values() array has every other row reversed relative to the
+    normalized latitudes/longitudes, so values were paired with the wrong grid
+    points (Chapel Hill read ~10 F too cold). Reverse the odd rows so values line
+    up with the coordinates. Verified to 0.0000 K vs cfgrib on the NBM CONUS grid.
+    A no-op for grids without alternating row scanning."""
+    try:
+        if int(eccodes.codes_get(gid, "alternativeRowScanning")) != 1:
+            return vals.reshape(-1)
+        ni = int(eccodes.codes_get(gid, "Ni"))
+        nj = int(eccodes.codes_get(gid, "Nj"))
+        if ni * nj != vals.size:
+            return vals.reshape(-1)
+        grid = vals.reshape(nj, ni)
+        grid[1::2] = grid[1::2, ::-1].copy()
+        return grid.reshape(-1)
+    except Exception:
+        return vals.reshape(-1)
+
+
 def _read_grib_message_eccodes(data_bytes, tmp_dir, want_latlon=True):
     _configure_eccodes_runtime()
     try:
@@ -1024,7 +1045,8 @@ def _read_grib_message_eccodes(data_bytes, tmp_dir, want_latlon=True):
                 gid = eccodes.codes_grib_new_from_file(f)
                 if gid is None:
                     return None, None, None
-                vals = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64).flatten()
+                vals = np.array(eccodes.codes_get_values(gid), dtype=np.float64)
+                vals = _undo_alt_row_scan(eccodes, gid, vals)
                 if not want_latlon:
                     return None, None, vals
                 lats = np.asarray(eccodes.codes_get_array(gid, "latitudes"), dtype=np.float64)
@@ -1067,10 +1089,10 @@ def _read_grib_message_cfgrib(data_bytes, tmp_dir, want_latlon=True):
                 if want_latlon and ("latitude" not in ds.coords or "longitude" not in ds.coords):
                     return None, None, None
                 v = list(ds.data_vars)[0]
-                vals = np.asarray(ds[v].values).flatten()
+                vals = np.asarray(ds[v].values, dtype=np.float64).flatten()
                 if want_latlon:
-                    lats = np.asarray(ds["latitude"].values).flatten()
-                    lons = np.asarray(ds["longitude"].values).flatten()
+                    lats = np.asarray(ds["latitude"].values, dtype=np.float64).flatten()
+                    lons = np.asarray(ds["longitude"].values, dtype=np.float64).flatten()
                 else:
                     lats = lons = None
             finally:
@@ -1089,6 +1111,8 @@ def _read_grib_message_cfgrib(data_bytes, tmp_dir, want_latlon=True):
 
 
 def _read_grib_message(data_bytes, tmp_dir, want_latlon=True):
+    # ecCodes (light, fast) with the alternativeRowScanning reorder applied in
+    # _read_grib_message_eccodes; cfgrib is a correctness-preserving fallback.
     lats, lons, vals = _read_grib_message_eccodes(data_bytes, tmp_dir, want_latlon)
     if vals is not None:
         return lats, lons, vals
